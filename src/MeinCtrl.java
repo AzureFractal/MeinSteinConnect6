@@ -22,16 +22,17 @@
  * along with MeinStein Connect6.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+package src;
+
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.datatransfer.*;
 import javax.swing.*;		// Use swing Timer
 import java.io.*;
 import java.text.NumberFormat;
-import java.util.Random;	// NOT: util Timer
-import java.util.Arrays;
-import java.util.Calendar;
-import java.util.Iterator;
+import java.util.*;
+import java.util.List;
+import java.util.stream.IntStream;
 import javax.imageio.*;
 import javax.imageio.stream.FileImageOutputStream;
 
@@ -66,21 +67,46 @@ public class MeinCtrl extends JPanel implements ActionListener {
      ** dead3: playing 1 stone  can generate 1 threat.
      ** dead2: playing 2 stone  can generate 1 threat.
      **/
-    static final String[] chainType = {"-", "dead2", "dead3", "live2", "lv2d3", "live3", "dead4", "dead5", "live4", "lv4d5", "live5", "done6"};
-    static final int[] posVal = {0, 100, 300, 400, 600, 1000, 2000, 2000, 4000, 4500, 4500, 1000000};
-    static final int[] thrVal = {0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 2, 10};
-    static final int[] thrLen = {1, 2, 3, 2, 3, 3, 4, 5, 4, 5, 5, 6};
+    static final String[] chainType = {"-", "dead2", "dead3", "liv2a", "liv2b", "liv2c", "lv2d3", "liv3a", "liv3b", "dead4", "dead5", "live4", "lv4d5", "live5", "done6"};
+    // orig posVal: {0, 100, 300, 370, 400, 430, 600, 960, 1020, 2000, 2000, 4000, 4500, 4500, 1000000};
+    static int[] posVal = {0, 100, 300, 400, 400, 400, 600, 1000, 1000, 1200, 1200, 2400, 2500, 2500, 1000000};
+    // Suppose we have 2 live3s. this can be converted to 2 dead4s on the next turn after the opponent blocks
+    // Therefore live3s are similar in value to dead4s
+    static final int[] posVal0 = {0, 100, 300, 400, 400, 400, 600, 1000, 1000, 1200, 1200, 2400, 2500, 2500, 1000000};
+    static final int[] posVal1 = {0, 100, 300, 400, 400, 400, 600, 1000, 1000, 1200, 1200, 2400, 2500, 2500, 1000000};
+    static final int[] thrVal = {0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2, 2, 2, 10};
+    static final int[] thrLen = {1, 2, 3, 2, 2, 2, 3, 3, 3, 4, 5, 4, 5, 5, 6};
     static final int MAX_SEG_LENGTH = 15;
-    static final int DEAD2 = 1,  DEAD3 = 2,  LIVE2 = 3,  LV2D3 = 4,  LIVE3 = 5,  DEAD4 = 6,  DEAD5 = 7,  LIVE4 = 8,  LV4D5 = 9,  LIVE5 = 10,  DONE6 = 11;
+    static final int DEAD2 = 1,  DEAD3 = 2,  LIV2A = 3,  LIV2B = 4,  LIV2C = 5,  LV2D3 = 6,  LIV3A = 7,  LIV3B = 8,
+                     DEAD4 = 9,  DEAD5 = 10,  LIVE4 = 11,  LV4D5 = 12,  LIVE5 = 13,  DONE6 = 14;
     static final int OPT_DEFEND = 1;
+    static final int DISTANCE_PRUNING_THRESH = 6;
+    static final int ENGINE_DRAW_STONES = 140;
+    int oScoreNumerator0 = 700; // 667;
+    int oScoreNumerator1 = 700; // 667;
+    int depth0 = 3;
+    int depth1 = 3;
+    int quiet0 = 3;
+    int quiet1 = 3;
+    int selectionSize0 = 20;
+    int selectionSize1 = 20;
+    int arbValue0 = 2000;
+    int arbValue1 = 2000;
+    int selectionSize = 20;
+    long timeWhite = 0;
+    long timeBlack = 0;
     static int[] dist = new int[bSquare];
     static int logLevel = 3;
     private static final long serialVersionUID = 3678805447708336160L;
-    long cutOffTime = 60000L;
-    int stdDepth = 4;
-    int stdQuiet = 0;
+    long cutOffTime = 50000L;
+    int stdDepth = 3;
+    int stdQuiet = 3;
+    int strategy = 0;
+    String[] moveInfoStrings = new String[100];
+    int[] moveInfoScores = new int[100];
 
     MeinDisplay disp;
+    JTextArea gameEvaluationText = new JTextArea("game eval:", 23, 55);
     JTextArea gameNotation = new JTextArea("game notation", 34, 34);
     JTextArea messText = new JTextArea();
     JScrollPane messages = new JScrollPane(messText);
@@ -116,7 +142,7 @@ public class MeinCtrl extends JPanel implements ActionListener {
     String pasteString;
     LogWriter htmlLog;
     long time0, timeE;
-    int countGoalVal, countNodeVal, countMoveVal, countBetaVal;
+    int countNodeVal, countTopMoveVal;
     byte[] table[] = new byte[MAX_SEG_LENGTH - 5][];
     final boolean html = false;
     MemoryDB memDB = new MemoryDB();
@@ -126,19 +152,23 @@ public class MeinCtrl extends JPanel implements ActionListener {
         disp.refCtrl(this);
         nf.setMinimumIntegerDigits(2);
         nf.setMaximumFractionDigits(1);
-        setPreferredSize(new Dimension(600, 450));
+        setPreferredSize(new Dimension(600, 550));
         setLayout(new BorderLayout());
 
+        gameEvaluationText.setFont(new Font(null, Font.PLAIN, 10));
+        gameNotation.setEditable(false);
         gameNotation.setFont(new Font(null, Font.PLAIN, 10));
         gameNotation.setEditable(true);
         messText.setFont(new Font(null, Font.PLAIN, 10));
         messText.setEditable(true);
 
-        gameNotation.setPreferredSize(new Dimension(200, 378));
-        aPan.setPreferredSize(new Dimension(250, 378));
-        bPan.setPreferredSize(new Dimension(200, 378));
+        gameEvaluationText.setPreferredSize(new Dimension(500, 150));
+        gameNotation.setPreferredSize(new Dimension(200, 318));
+        aPan.setPreferredSize(new Dimension(250, 318));
+        bPan.setPreferredSize(new Dimension(200, 318));
         messages.setPreferredSize(new Dimension(500, 200));
 
+        add(gameEvaluationText, BorderLayout.SOUTH);
         add(gameNotation, BorderLayout.WEST);
         add(aPan, BorderLayout.CENTER);
         add(bPan, BorderLayout.EAST);
@@ -169,6 +199,7 @@ public class MeinCtrl extends JPanel implements ActionListener {
 
         validate();
         tableGen();
+        resetBoard();
     }
 
 
@@ -197,18 +228,62 @@ public class MeinCtrl extends JPanel implements ActionListener {
             } else {				// second stone of a move
                 Move m;
                 cur.setS(i1, empty);
-                curGame.add(m = new Move(cur.moveNum / 2, i1, i2, 0, 0, 0, null));
+                int stone = cur.moveNum / 2 % 2 == 0 ? black : white;
+                int pScore = getMovePscore(stone, i1, i2);
+                // Calculate the move value
+                curGame.add(m = new Move(cur.moveNum / 2, i1, i2, 0, 0, pScore, null));
                 cur.makeMove(m);
                 disp.drawSquare(cur.num[m.i1] % 2 == 0, cur.num[m.i1], m.i1 % bSize, m.i1 / bSize);
                 disp.drawSquare(cur.num[m.i2] % 2 == 0, cur.num[m.i2], m.i2 % bSize, m.i2 / bSize);
                 showGame(curGame.getPgn());
+//                System.out.println("Board eval: " + curGame.getBoardScore());
             }
         }
         return i2;
     }
 
+    public int getMovePscore(int colToMove, int i1, int i2) {
+        int[] tval = new int[3], pval = new int[4];
+        int pScore = 0;
+        cur.evalSq(colToMove, i1, tval, pval);
+        pScore += pval[0] - pval[1];
+        cur.setS(i1, colToMove);
+        cur.evalSq(colToMove, i2, tval, pval);
+        pScore += pval[0] - pval[1];
+
+        cur.setS(i1, empty);
+        return pScore;
+    }
+
     public void showGame(String pgn) {
         gameNotation.setText(pgn);
+    }
+
+    public void resetEvaluationString() {
+        gameEvaluationText.setText("");
+        for (int i=0;i<moveInfoStrings.length;i++) {
+            moveInfoStrings[i] = "";
+            moveInfoScores[i] = Integer.MIN_VALUE+100;
+        }
+    }
+
+    public void displayEvaluationString(int score) {
+        String displayString = "";
+        displayString += "GameEval " + ((cur.moveNum / 2 % 2 == 0) ? "White": "Black") + ":" + score;
+        displayString +=  "\n" + "BoardScore:" + curGame.getBoardScore() + "           (>0 favors white)";
+
+        String[] sorted = IntStream.range(0, moveInfoScores.length).boxed()
+                .sorted(Comparator.comparingInt(i -> -moveInfoScores[i]))
+                .map(i -> moveInfoStrings[i])
+                .toArray(String[]::new);
+
+        for (int i = 0; i < sorted.length; i++) {
+            displayString = displayString + "\r\n" + sorted[i];
+        }
+
+//        System.out.println(Arrays.toString(moveInfoScores));
+
+        gameEvaluationText.setText(displayString);
     }
 
     boolean make6(int size, int me, int op, int bstart, int stones) {
@@ -332,14 +407,14 @@ public class MeinCtrl extends JPanel implements ActionListener {
                 } else if (make6(comb, p, 0, 1, 2)) {
                     ct = DEAD4;
                 } else if (testLive(comb, p, 3)) {
-                    ct = LIVE3;
+                    ct = LIV3B;
                 } else {
                     boolean l2 = testLive(comb, p, 2);
                     boolean d3 = make6(comb, p, 0, 1, 3);
                     if (l2 && d3) {
                         ct = LV2D3;
                     } else if (l2) {
-                        ct = LIVE2;
+                        ct = LIV2C;
                     } else if (d3) {
                         ct = DEAD3;
                     } else if (make6(comb, p, 0, 1, 4)) {
@@ -350,7 +425,7 @@ public class MeinCtrl extends JPanel implements ActionListener {
                 }
             }
             table[len - 6][p] = ct;
-            if (len <= 8 && ct > 0) {
+            if (len <= (8) && ct > 0) {
                 String bin = Integer.toBinaryString(p);
                 System.out.println(len + " " + chainType[ct] + " " + zeroes.substring(bin.length(), len) + bin);
             }
@@ -559,37 +634,34 @@ public class MeinCtrl extends JPanel implements ActionListener {
         } else if (src == movTime) {
             String s = movTime.getText();
             stdDepth = s.charAt(0) - '0';
+            depth0 = depth1 = stdDepth;
             if (s.length() > 2 && s.charAt(1) == '/') {
                 stdQuiet = Integer.parseInt(s.substring(2));
             } else {
                 stdQuiet = 0;
             }
+            quiet0 = quiet1 = stdQuiet;
             if (logLevel >= 1) {
                 System.out.println("depth: " + stdDepth + " quiescence: " + stdQuiet);
             }
         } else if (src == newB) {
-            if (logLevel >= 4) {
-                System.out.println("New game");
-            }
-            cur.newStartingPos();
-            curGame = new Game("New", "Pamplona ESP", "", String.valueOf(++round),
-                "Me", "MeinStein", "*", "", cur.toString());
-            cur.makeMove(curGame.forward());	// Obligatory first black move
-            drawBoard();
+            resetBoard();
         } else if (src == listB) {
-            cur.select((cur.moveNum / 2) % 2 == 0 ? black : white, null);
+            cur.select((cur.moveNum / 2) % 2 == 0 ? black : white, null, 0);
         } else if (src == calcB) {
-            cur.anaPlay(stdDepth, stdQuiet, OPT_DEFEND);
-        } else if (src == engB) {
+            resetEvaluationString();
+            if (cur.moveNum / 2 % 2 == 0) {
+                strategy = 0;
+                posVal = posVal0;
+            } else {
+                strategy = 1;
+                posVal = posVal1;
+            }
             int score;
-            do {
-                if (cur.moveNum / 2 % 2 == 0) {
-                    score = cur.anaPlay(stdDepth, stdQuiet, OPT_DEFEND);	// Black
-                } else {
-                    score = cur.anaPlay(stdDepth, stdQuiet, 0);		// white
-                }
-                disp.now();
-            } while (-posVal[DONE6] < score && score < posVal[DONE6] && cur.moveNum < 350);
+            score = cur.anaPlay(stdDepth, stdQuiet, OPT_DEFEND);
+            displayEvaluationString(score);
+        } else if (src == engB) {
+            playEngineGame();
         } else if (src == backB) {
             if (logLevel >= 4) {
                 System.out.println("Back");
@@ -626,8 +698,13 @@ public class MeinCtrl extends JPanel implements ActionListener {
 
     static String coord(int m) {
         int i1 = m >> 16, i2 = m & 0xffff;
-        return (char) ('a' + i1 % bSize) + String.valueOf((bSize - i1 / bSize)) +
-            (char) ('a' + i2 % bSize) + String.valueOf((bSize - i2 / bSize));
+        if (i1 % bSize > i2 % bSize) {
+            return (char) ('a' + i2 % bSize) + String.valueOf((bSize - i2 / bSize)) +
+                    (char) ('a' + i1 % bSize) + String.valueOf((bSize - i1 / bSize));
+        } else {
+            return (char) ('a' + i1 % bSize) + String.valueOf((bSize - i1 / bSize)) +
+                    (char) ('a' + i2 % bSize) + String.valueOf((bSize - i2 / bSize));
+        }
     }
 
     /**
@@ -716,6 +793,16 @@ public class MeinCtrl extends JPanel implements ActionListener {
             this.ply = ply;
         }
 
+        public int getBoardScore() {
+            int boardScore = 0;
+            for (int i = 0; i < ply; i++) {
+                if (move[i] != null) {
+                    boardScore += (i % 2 == 0 ? -1 : +1) * move[i].pScore;
+                }
+            }
+            return boardScore;
+        }
+
         String getPgn() {
             return getPgn("\n");
         }
@@ -743,8 +830,6 @@ public class MeinCtrl extends JPanel implements ActionListener {
 
         /**
          * Save this game or a string to the log file.
-         *
-         * @param   s	the string to be logged. If null the whole game is logged.
          */
         public void save() {
             log(null);
@@ -760,7 +845,7 @@ public class MeinCtrl extends JPanel implements ActionListener {
     /**
      * 
      */
-    class Move implements Comparable, Cloneable {
+    static class Move implements Comparable, Cloneable {
 
         int ply, i1, i2, score, oScore, pScore, tval0, tval1;
 
@@ -856,14 +941,18 @@ public class MeinCtrl extends JPanel implements ActionListener {
      *  342	343	344	345	346	347	348	349	350	351	352	353	354	355	356	357	358	359	360
      */
     class Position {
-        final int PV_SIZE = 100,  SELECTION_SIZE = 40,  STONES1 = 10;
+        final int PV_SIZE = 100;//,  SELECTION_SIZE = 40;
         Move[] listMoves = new Move[bSquare], seldMoves = new Move[bSquare * bSquare / 2];
         int[][] bla = new int[6][bSize], whi = new int[6][bSize];		//   | - / / \ \
         int[] lenS = new int[4], updB = new int[4], updW = new int[4], listLen = new int[3];
         int[] num = new int[bSquare];
-        int pvar[][] = new int[PV_SIZE][PV_SIZE + 1], svar[] = new int[PV_SIZE];
+        // pvar[s][k] contains principal variation of candidate s at the k step
+        // The pvar[s][PV_SIZE] entry contains the score of the move
+        int[][] pvar = new int[PV_SIZE][PV_SIZE + 1];
+        int[] svar = new int[PV_SIZE];
         int qDepth = 0, moveNum, mir;
-        boolean select1[] = new boolean[bSquare], optionDefend = false;
+        private boolean select1[] = new boolean[bSquare];
+        boolean optionDefend = false;
 
         public Position() {
             for (int i = 0; i < listMoves.length; i++) {
@@ -877,7 +966,8 @@ public class MeinCtrl extends JPanel implements ActionListener {
 
         public void newStartingPos() {
             for (int sq = 0; sq < bSquare; sq++) {
-                dist[sq] = Math.max(Math.abs(sq % bSize - 9), Math.abs(sq / bSize - 9));
+                // YH Edit: Subtract 9 from this
+                dist[sq] = Math.max(Math.abs(sq % bSize - 9), Math.abs(sq / bSize - 9)); // -9 +
                 num[sq] = 0;
             }
             for (int i = 0; i < whi.length; i++) {
@@ -1155,7 +1245,8 @@ public class MeinCtrl extends JPanel implements ActionListener {
             for (int d = s; pvar[s][d] != 0; d++) {
                 pv = pv + " " + coord(pvar[s][d]);
             }
-            return pv + " (" + pvar[s][PV_SIZE] + ")";
+            // Invert the score here to make more sense???
+            return pv + " (" + (-pvar[s][PV_SIZE]) + ")";
         }
 
         public int anaPlay(int depth, int qd, int options) {
@@ -1167,8 +1258,10 @@ public class MeinCtrl extends JPanel implements ActionListener {
             time0 = System.currentTimeMillis();
             timeE = time0 + cutOffTime;
             countNodeVal = 0;
+            countTopMoveVal = 0;
             System.out.println(this);
             pvar[0][0] = 0;
+            System.out.println("Guess:" + coord(pvar[0][1]) + coord(pvar[0][2]) + coord(pvar[0][3]));
             score = cur.pvs(-posVal[DONE6] + 1000, posVal[DONE6] - 1000, col, depth, 0, eval(col));
             if (pvar[0][0] > 0) {
                 tryMove(pvar[0][0] >> 16, pvar[0][0] & 0xffff, 0);
@@ -1182,15 +1275,19 @@ public class MeinCtrl extends JPanel implements ActionListener {
                     takeBack(0);
                 }
             }
-            System.out.println((System.currentTimeMillis() - time0) + "ms. nodes: " + countNodeVal);
+            long runTime = (System.currentTimeMillis() - time0);
+            System.out.println(runTime + "ms. nodes: " + countTopMoveVal + "/" + countNodeVal);
+            if (col==black) {timeBlack += runTime;} else {timeWhite += runTime;};
             return score;
         }
 
+        // Perform Principal Variation Search
         @SuppressWarnings("empty-statement")
         public int pvs(int alpha, int beta, int col, int depth, int pv, int dScore) {
             int score, max = Integer.MIN_VALUE;
-            Move moves[] = new Move[depth > 0 ? SELECTION_SIZE : SELECTION_SIZE / 2];
-            int nMoves = select(col, moves);
+            // Select some number of moves
+            Move moves[] = new Move[depth > 0 ? selectionSize : selectionSize / 2];
+            int nMoves = select(col, moves, pv);
             boolean go = timeE != 0L;
 
             for (int m = 0; m < nMoves && go; m++) {
@@ -1201,12 +1298,14 @@ public class MeinCtrl extends JPanel implements ActionListener {
                 } else {
                     int newDepth = depth - 1;
                     boolean deeper = newDepth > 0;
-                    score = dScore + moves[m].pScore;
+                    score = dScore + moves[m].pScore - (strategy == 0 ? arbValue0 : arbValue1);
                     if (deeper) {
                         defendCol = empty;
                     }
                     if (optionDefend && !deeper && -qDepth < newDepth) {
+//                        System.out.println("Possibly go deeper:" + moves[m].tval0 + "," + moves[m].tval1);
                         // Quiescence search
+                        // Color col is defending
                         if (moves[m].tval1 <= -2 && col != -defendCol) {
                             deeper = true;
                             if (defendCol == empty) {
@@ -1217,6 +1316,7 @@ public class MeinCtrl extends JPanel implements ActionListener {
                                     nMoves = i;
                                 }
                             }
+                        // Color col is attacking
                         } else if (moves[m].tval0 >= 2 && col != defendCol) {
                             deeper = score < beta;
                             if (defendCol == empty) {
@@ -1239,21 +1339,26 @@ public class MeinCtrl extends JPanel implements ActionListener {
                     }
                 }
                 if (pv == 0) {
+                    moveInfoStrings[m] = (m + ": " + alpha + "," + beta + " " + moves[m].score + " " + moves[m] + pvString(1));
+                    moveInfoScores[m] = score;
                     System.out.println(m + ": " + alpha + "," + beta + " " + moves[m].score + " " + moves[m] + pvString(1));
                 }
                 if (max < score && timeE != 0L) {
                     if (pv == 0) {
-                        System.out.println("=========================================================");
+                        System.out.println(m + "=========================================================");
                     }
                     pvar[pv][pv] = (moves[m].i1 << 16) | moves[m].i2;
                     pvar[pv][PV_SIZE] = max = score;
                     for (int d = pv + 1; (pvar[pv][d] = pvar[pv + 1][d]) != 0; d++);
                     pvar[pv + 1][pv + 1] = 0;		// Remove old move
+                    // Beta cutoff
                     if (beta <= score) {
+//                        System.out.print("[" + m + "/" + moves.length + "]");
                         return score;
                     }
                 }
                 countNodeVal++;
+                countTopMoveVal++;
                 if (System.currentTimeMillis() >= timeE) {
                     timeE = 0L;
                     return max;
@@ -1267,8 +1372,13 @@ public class MeinCtrl extends JPanel implements ActionListener {
             Slice slice = new Slice();
             int maxLen = 0;
             pval[0] = -dist[sq];
-            pval[3] = pval[2] = pval[1] = tval[0] = tval[1] = 0;
+            // pval0 color's value if color plays sq
+            // pval1 notColor's value if color plays sq
+            // pval2 notColor's value if notColor plays sq
+            // pval3 color's value if notColor plays sq
 
+            pval[3] = pval[2] = pval[1] = tval[0] = tval[1] = 0;
+            // Calculate values as a baseline without playing sq
             setS(sq, empty);
             for (int d = 0; d < updB.length; d++) {
                 if (col == black) {
@@ -1284,7 +1394,8 @@ public class MeinCtrl extends JPanel implements ActionListener {
             }
             pval[2] = pval[1];
             pval[3] = pval[0];
-            setS(sq, -col);		// if opponent would play sq
+            // Calculate values if opponent would play sq
+            setS(sq, -col);
             for (int d = 0; d < updB.length; d++) {
                 if (-col == black) {
                     slice.init(lenS[d], updB[d], updW[d]);
@@ -1301,7 +1412,8 @@ public class MeinCtrl extends JPanel implements ActionListener {
             }
             setS(sq, empty);
 
-            setS(sq, col);		// Play sq
+            // Calculate values if player would play sq
+            setS(sq, col);
             for (int d = 0; d < updB.length; d++) {
                 if (col == black) {
                     slice.init(lenS[d], updB[d], updW[d]);
@@ -1321,6 +1433,7 @@ public class MeinCtrl extends JPanel implements ActionListener {
             setS(sq, empty);
         }
 
+        // WLog the first move is "closer" to main body than second
         public void listEval(int colToMove) {
             int score, oScore, pScore, minVal = -posVal[DONE6];
             int[] tval = new int[3], pval = new int[4];
@@ -1329,34 +1442,51 @@ public class MeinCtrl extends JPanel implements ActionListener {
 
             for (int sq = 0; sq < bSquare; sq++) {
                 select1[sq] = false;
-                if (num[sq] > 0) // not empty
+                if (num[sq] != empty) // not empty
                 {
                     continue;
                 }
 
                 evalSq(colToMove, sq, tval, pval);
-                pScore = pval[0] - pval[1];
-                oScore = pval[2] - pval[3];
+                pScore = pval[0] - pval[1]; // Change in color's score if color plays sq
+                oScore = pval[2] - pval[3]; // Change in notColor's score if notColor plays sq
                 if (tval[2] >= 5) {
                     score = minVal = posVal[DONE6];	// select only winning squares
                 } else {
-                    score = 10000 * tval[0] - 100000 * tval[1] + pScore + oScore * 2 / 3;
+                    score = 10000 * tval[0] - 100000 * tval[1] + pScore + oScore * (strategy == 0? oScoreNumerator0 : oScoreNumerator1)/ 1000; // 2 / 3;
+                }
+                if (closestStoneDistance(sq) >= DISTANCE_PRUNING_THRESH) {
+                    score -= 60000;
                 }
                 if (score >= minVal) {	//	 || sq == 254
                     listMoves[listLen[1]++].set(moveNum / 2, sq, -1, score, oScore, pScore, tval);
                 }
             }
             Arrays.sort(listMoves, 0, listLen[1]);
-            if (minVal < posVal[DEAD3]) {
-                minVal = posVal[DEAD3];
+
+            // YH: Changed this from DEAD3 to DEAD2, but is a bad idea?
+            if (minVal < posVal[DEAD3] * (1000 + (strategy == 0? oScoreNumerator0 : oScoreNumerator1)) / 1660) {
+                minVal = posVal[DEAD3] * (1000 + (strategy == 0? oScoreNumerator0 : oScoreNumerator1)) / 1660;
             }
-            for (int s = listLen[0] = 0; s < listLen[1]; s++) {
+
+            for (int s = listLen[0] = 0; s < listMoves.length; s++) {
                 if (listMoves[s].score <= 0) {
                     listLen[1] = s;
+                    break;
                 } else if (listMoves[s].score >= minVal) {
                     listLen[0]++;
                 }
             }
+//            assert listLen[0] > 0: "listLen[0] should be positive";
+//            assert listLen[1] > 0: "listLen[1] should be positive";
+//            assert listLen[1] > listLen[0]: "listLen[1] should be more than listLen[0]";
+
+//            listLen[0] = Math.min(listLen[0], 20);
+//            if (true) {
+//                for (int kk = 0; kk < listMoves.length;kk+=10) {
+//                    System.out.println(listMoves[kk].toString() + listMoves[kk].score + "," + (kk < listLen[0]));
+//                }
+//            }
             listLen[0] = Math.min(listLen[1], listLen[0] + (minVal == posVal[DONE6] ? 0 : 4));
             for (int s = 0; s < listLen[0]; s++) {
                 select1[listMoves[s].i1] = true;
@@ -1368,21 +1498,52 @@ public class MeinCtrl extends JPanel implements ActionListener {
             return d < 12 || d % bSize == 0 || d % (bSize - 1) == 0 || d % (bSize + 1) == 0;
         }
 
-        public int select(int colToMove, Move moves[]) {
+        int l1Distance(int sq1, int sq2) {
+            int x_dist = Math.abs((sq1 % bSize) - (sq2 % bSize));
+            int y_dist = Math.abs((sq1 / bSize) - (sq2 / bSize));
+
+            return Math.max(x_dist, y_dist);
+        }
+
+        int closestStoneDistance(int sq1) {
+            int closestDistance = bSize;
+            for (int sq2 = 0; sq2 < bSquare; sq2++) {
+                if (num[sq2] != 0) {
+                    closestDistance = Math.min(l1Distance(sq1, sq2), closestDistance);
+                }
+            }
+
+            return closestDistance;
+        }
+
+        public int select(int colToMove, Move moves[], int pv) {
             int[] tval = new int[3], pval = new int[4];
             int score, oScore, pScore;
             boolean won = false;
 
             listEval(colToMove);
+//            int[] closestStoneDistanceWithSq1 = new int[listLen[0]];
+//            for (int n1 = 0; n1 < listLen[0]; n1++) {
+//                int sq2, sq1 = listMoves[n1].i1;
+//                closestStoneDistanceWithSq1[n1] = closestStoneDistance(sq1);
+//            }
+            // Loop over square 1
             for (int n1 = listLen[2] = 0; n1 < listLen[0] && !won; n1++) {
                 int sq2, sq1 = listMoves[n1].i1;
+                assert num[sq1] == empty: "First square wasn't empty when we tried to place";
                 setS(sq1, colToMove);
 
+                // Loop over square 2
                 for (int n2 = n1 + 1; n2 < listLen[1] && !won; n2++) {
                     sq2 = listMoves[n2].i1;
                     if (listMoves[n1].score < posVal[DEAD4] && n1 + n1 > listLen[0] && !sameSlice(sq1, sq2)) {
                         continue;
                     }
+//                    System.out.println((sq2 % bSize) + "," + (sq2 / bSize) + "," + closestStoneDistance(sq2));
+//                    // Conservative
+//                    if (Math.min(closestStoneDistanceWithSq1[n1], l1Distance(sq1, sq2)) >= 4){//+0*DISTANCE_PRUNING_THRESH) {
+//                        continue;
+//                    }
                     evalSq(colToMove, sq2, tval, pval);
                     pScore = listMoves[n1].pScore + pval[0] - pval[1];
                     oScore = listMoves[n1].oScore + pval[2] - pval[3];
@@ -1398,16 +1559,25 @@ public class MeinCtrl extends JPanel implements ActionListener {
                         }
                         tval[0] += listMoves[n1].tval0;
                         tval[1] += listMoves[n1].tval1;
-                        score += 10000 * tval[0] - 100000 * tval[1] + pScore + oScore * 2 / 3;
+                        score += 10000 * tval[0] - 100000 * tval[1] + pScore + oScore * (strategy == 0? oScoreNumerator0 : oScoreNumerator1) / 1000; // 2 / 3;
+//                        if (true || strategy == 1) {
+//                            if (pv == 0) {
+//                                if (((pvar[0][pv + 1] >> 16) == sq1 && (pvar[0][pv + 1] & 0xffff) == sq2) ||
+//                                        ((pvar[0][pv + 1] >> 16) == sq2 && (pvar[0][pv + 1] & 0xffff) == sq1)) {
+//                                    score += 5000;
+//                                }
+//                            }
+//                        }
                     }
                     seldMoves[listLen[2]++].set(cur.moveNum / 2, sq1, sq2, score, oScore, pScore, tval);
                 }
 
                 setS(sq1, empty);	// Take back sq
             }
+//            System.out.println("Num moves considered:" + listLen[2] + ", ll0:" + listLen[0] + ", ll1:" + listLen[1]);
             Arrays.sort(seldMoves, 0, listLen[2]);
             if (moves == null) {
-                int len = Math.min(2 * SELECTION_SIZE, listLen[2]);
+                int len = Math.min(2 * selectionSize, listLen[2]);
 
                 System.out.println("stones: " + listLen[0] + " " + listLen[1]);
                 for (int s = 0; s < listLen[0]; s++) {
@@ -1422,10 +1592,32 @@ public class MeinCtrl extends JPanel implements ActionListener {
                 }
                 return len;
             } else {
+//                int len = Math.min(moves.length, listLen[2]);
+//                for (int s = 0; s < len; s++) {
+//                    moves[s] = (Move) seldMoves[s].clone();
+//                }
+                // We reserve some candidate moves for non threat moves. This is because sometimes there are too many
+                // threat moves when we don't want to make a threat move
                 int len = Math.min(moves.length, listLen[2]);
-                for (int s = 0; s < len; s++) {
-                    moves[s] = (Move) seldMoves[s].clone();
+                int reservedNonThreatMoves = len / 5;
+                int s = 0;
+                int src = 0;
+                while (s < len - reservedNonThreatMoves) {
+                    moves[s] = (Move) seldMoves[src].clone();
+                    s++;
+                    src++;
                 }
+                while (s < len) {
+                    // If move doesn't make a threat, consider it
+                    if (seldMoves[src].tval0 == 0) {
+                        moves[s] = (Move) seldMoves[src].clone();
+                        s++;
+                    }
+                    src++;
+                }
+//                if (src!=s) {
+//                    System.out.println("Reservation in effect");
+//                }
                 return len;
             }
         }
@@ -1625,4 +1817,45 @@ public class MeinCtrl extends JPanel implements ActionListener {
             }
         }
     }
+
+    void resetBoard() {
+        if (logLevel >= 4) {
+            System.out.println("New game");
+        }
+        cur.newStartingPos();
+        curGame = new Game("New", "Pamplona ESP", "", String.valueOf(++round),
+                "Me", "MeinStein", "*", "", cur.toString());
+        cur.makeMove(curGame.forward());	// Obligatory first black move
+        drawBoard();
+    }
+
+    int playEngineGame() {
+        timeBlack = timeWhite = 0;
+        int score;
+        do {
+            resetEvaluationString();
+            if (cur.moveNum / 2 % 2 == 0) {
+                strategy = 0;
+                posVal = posVal0;
+                selectionSize = selectionSize0;
+                score = cur.anaPlay(depth0, quiet0, OPT_DEFEND);	// Black
+            } else {
+                strategy = 1;
+                posVal = posVal1;
+                selectionSize = selectionSize1;
+                score = cur.anaPlay(depth1, quiet1, OPT_DEFEND);	// White
+            }
+            displayEvaluationString(score);
+            disp.now();
+            paintImmediately(0, 0, getWidth(), getHeight());
+        } while (-posVal[DONE6] < score && score < posVal[DONE6] && cur.moveNum < ENGINE_DRAW_STONES);
+
+        int result = 0;
+        System.out.println(posVal[DONE6] + "," + score);
+        if (-posVal[DONE6] == score || score == posVal[DONE6]) {
+            result = (cur.moveNum / 2 % 2 == 0) ? -1 : 1; // + 1 for black
+        }
+        return result;
+    }
+
 } // MeinCtrl

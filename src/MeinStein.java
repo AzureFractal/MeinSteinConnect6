@@ -22,9 +22,14 @@
  * along with MeinStein Connect6.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+package src;
+
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.*;
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
 import javax.swing.*;
 
 /**
@@ -40,7 +45,7 @@ public class MeinStein {
     final static int bSize = 19,  bSquare = bSize * bSize;
     final static int sqHalf = 15,  sqWidth = sqHalf * 2 + 1;
 
-    private static void createAndShowGUI() {
+    private static void createAndShowGUI() throws IOException {
         MeinCtrl ctrl;
         MeinDisplay disp;
         JFrame.setDefaultLookAndFeelDecorated(true);
@@ -54,6 +59,7 @@ public class MeinStein {
         fdf.setSize(bSize * sqWidth + 10, bSize * sqWidth + 33);
         fdf.setVisible(true);
         JFrame fcf = new JFrame("MeinStein Controls");
+        fcf.setLocation(600,0);
         fcf.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         ctrl = new MeinCtrl(disp);
         if (ctrl == null) {
@@ -62,6 +68,39 @@ public class MeinStein {
         fcf.getContentPane().add(ctrl);
         fcf.pack();
         fcf.setVisible(true);
+
+        ctrl.resetBoard();
+
+        int central = (bSquare - 1) / 2;
+        // Diag close, Mickey Mouse, Long Gun, Short Gun, Opp Diag, Waterfall
+        int[] openingsSq1 = {central - 1, central + bSize - 1, central + bSize - 1, central + bSize - 1, central - bSize - 1, central + bSize - 1};
+        int[] openingsSq2 = {central - bSize, central + bSize + 1, central + 2, central + 1, central + bSize + 1, central + 2 * bSize + 1};
+
+//        for (int o = 0; o < openingsSq1.length; o++) {
+//            for (int i = 700; i <= 700; i+=400) {
+//                for (int j = 700; j <= 700; j+=400) {
+////                    if (i==j) {
+////                        continue;
+////                    }
+//                    ctrl.resetBoard();
+//                    ctrl.tryMove(openingsSq1[o], openingsSq2[o], 0);
+//                    ctrl.tryMove(openingsSq2[o], openingsSq1[o], 0);
+//                    ctrl.depth0 = 3;
+//                    ctrl.depth1 = 3;
+//                    ctrl.oScoreNumerator0 = i;
+//                    ctrl.oScoreNumerator1 = j;
+//                    int score = ctrl.playEngineGame();
+//                    System.out.println("YH Score (" + i + "," + j + "," + ctrl.depth0 + "," + ctrl.depth1 + "):" + score);
+//
+//                    String fileName = "./competitionScores13.txt";
+//                    String str = i + "," + j + "," + ctrl.depth0 + "," + ctrl.depth1 + "," + score + "," + ctrl.timeBlack + "," + ctrl.timeWhite + "\r\n";
+//                    BufferedWriter writer = new BufferedWriter(new FileWriter(fileName, true));
+//                    writer.append(str);
+//
+//                    writer.close();
+//                }
+//            }
+//        }
     }
 
     public static void main(String[] args) {
@@ -72,7 +111,11 @@ public class MeinStein {
             public void run() {
                 System.out.println("Your java.version is: " +
                     System.getProperty("java.version"));
-                createAndShowGUI();
+                try {
+                    createAndShowGUI();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
         });
     }
